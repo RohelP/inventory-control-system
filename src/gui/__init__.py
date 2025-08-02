@@ -1,0 +1,1 @@
+"""GUI package for inventory control desktop application."""

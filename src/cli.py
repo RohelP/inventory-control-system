@@ -107,7 +107,7 @@ def list_inventory(
         table.add_column("On Hand", justify="right", style="green")
         table.add_column("Available", justify="right", style="green")
         table.add_column("Reserved", justify="right", style="red")
-        table.add_column("Reorder Point", justify="right", style="orange")
+        table.add_column("Reorder Point", justify="right", style="yellow")
         table.add_column("Avg Cost", justify="right", style="cyan")
         
         for item in items:
@@ -341,10 +341,10 @@ def reorder_recommendations(
         table.add_column("Product Name", style="white")
         table.add_column("Location", style="yellow")
         table.add_column("Current", justify="right", style="red")
-        table.add_column("Reorder Point", justify="right", style="orange")
+        table.add_column("Reorder Point", justify="right", style="yellow")
         table.add_column("Suggested Qty", justify="right", style="green")
         table.add_column("Urgency", justify="right", style="red")
-        table.add_column("Stockout Date", style="orange")
+        table.add_column("Stockout Date", style="bright_yellow")
         
         for item in recommendations[:15]:  # Show top 15
             stockout_date = item['estimated_stockout_date']

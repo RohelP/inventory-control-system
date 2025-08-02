@@ -174,7 +174,7 @@ class DatabaseManager:
                     else:
                         initial_stock = product.minimum_order_quantity
                     
-                    reorder_point = (product.lead_time_days + product.safety_stock_days) * 2
+                    reorder_point = product.calculate_reorder_point() * 2
                     
                     inventory_item = InventoryItem(
                         product_id=product.id,
@@ -255,8 +255,14 @@ def init_database(database_url: str = None, with_sample_data: bool = True):
     
     if with_sample_data:
         print("Initializing sample data...")
-        db_manager.initialize_sample_data()
-        print("Database initialization complete!")
+        try:
+            db_manager.initialize_sample_data()
+            print("Database initialization complete!")
+        except Exception as e:
+            if "UNIQUE constraint failed" in str(e):
+                print("Sample data already exists, skipping initialization...")
+            else:
+                raise e
     else:
         print("Database ready (no sample data loaded)")
 

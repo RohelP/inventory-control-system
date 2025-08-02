@@ -84,8 +84,7 @@ class Product(Base, TimestampMixin):
     def __repr__(self) -> str:
         return f"<Product(sku='{self.sku}', name='{self.name}')>"
     
-    @property
-    def reorder_point(self) -> int:
+    def calculate_reorder_point(self) -> int:
         """Calculate reorder point based on lead time and safety stock."""
         # This is a simplified calculation - in production you'd use demand forecasting
         daily_demand = 1  # Placeholder - would calculate from historical data

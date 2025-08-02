@@ -231,7 +231,7 @@ class ReorderService:
             and_(
                 Product.is_active == True,
                 Product.is_purchasable == True,
-                InventoryItem.quantity_available <= InventoryItem.reorder_point
+                (InventoryItem.quantity_on_hand - InventoryItem.quantity_reserved) <= InventoryItem.reorder_point
             )
         )
         

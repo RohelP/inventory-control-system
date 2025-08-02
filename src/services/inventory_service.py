@@ -258,7 +258,7 @@ class InventoryService:
     def get_items_below_reorder_point(self, location_id: int = None) -> List[InventoryItem]:
         """Get inventory items below their reorder points."""
         query = self.db.query(InventoryItem).filter(
-            InventoryItem.quantity_on_hand <= InventoryItem.reorder_point
+            (InventoryItem.quantity_on_hand - InventoryItem.quantity_reserved) <= InventoryItem.reorder_point
         )
         
         if location_id:
