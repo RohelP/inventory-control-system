@@ -1,0 +1,24 @@
+directories:
+  output: dist
+  buildResources: build
+appId: com.company.inventory-control-system
+productName: Inventory Control System
+files:
+  - filter:
+      - main.js
+      - package.json
+      - node_modules/**/*
+      - out/**/*
+      - public/**/*
+win:
+  target: nsis
+mac:
+  category: public.app-category.business
+linux:
+  target: AppImage
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+electronVersion: 37.2.5
