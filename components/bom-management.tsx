@@ -7,7 +7,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Package, Calculator, Database } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Package, Calculator, Database, FileSpreadsheet } from "lucide-react"
+import ExcelBOMIntegration from "./excel-bom-integration"
+import { BOMExcelRow, CustomerOrderData } from "@/lib/excel-utils"
 
 interface BOMManagementProps {
   currentOrder: any
@@ -17,10 +20,12 @@ interface BOMManagementProps {
 }
 
 export default function BOMManagement({ currentOrder, orders, onBOMCreated, onSelectOrder }: BOMManagementProps) {
-  const [bomType, setBomType] = useState<"standard" | "custom" | null>(null)
+  const [bomType, setBomType] = useState<"standard" | "custom" | "excel" | null>(null)
   const [dimensions, setDimensions] = useState({ length: "", width: "", height: "" })
   const [bomComponents, setBomComponents] = useState<any[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
+  const [activeTab, setActiveTab] = useState<"manual" | "excel">("manual")
+  const [excelImported, setExcelImported] = useState(false)
 
   // Standard BOM database
   const standardBOMs = {
@@ -118,6 +123,53 @@ export default function BOMManagement({ currentOrder, orders, onBOMCreated, onSe
     onBOMCreated()
   }
 
+  const handleExcelBOMImported = (bomData: BOMExcelRow[], orderData: Partial<CustomerOrderData>) => {
+    // Convert Excel BOM format to internal format
+    const convertedBOM = bomData.map(item => ({
+      component: item.component,
+      partNumber: item.partNumber,
+      quantity: item.quantity,
+      material: item.material,
+      size: item.size,
+      unitCost: item.unitCost,
+      totalCost: item.totalCost,
+      supplier: item.supplier,
+      leadTimeDays: item.leadTimeDays
+    }))
+
+    setBomComponents(convertedBOM)
+    setBomType("excel")
+    setExcelImported(true)
+
+    // Update order dimensions if provided in Excel
+    if (orderData.dimensions) {
+      setDimensions({
+        length: orderData.dimensions.length || "",
+        width: orderData.dimensions.width || "",
+        height: orderData.dimensions.height || ""
+      })
+    }
+  }
+
+  const handleExcelBOMExported = () => {
+    // Optional: Add any post-export actions
+    console.log("BOM exported to Excel successfully")
+  }
+
+  const convertBOMForExcel = (bomData: any[]): BOMExcelRow[] => {
+    return bomData.map(item => ({
+      component: item.component,
+      partNumber: item.partNumber,
+      quantity: item.quantity,
+      material: item.material,
+      size: item.size,
+      unitCost: item.unitCost || 0,
+      totalCost: item.totalCost || (item.unitCost || 0) * item.quantity,
+      supplier: item.supplier,
+      leadTimeDays: item.leadTimeDays
+    }))
+  }
+
   // Get orders that need BOM creation
   const bomOrders = orders.filter((o) => o.currentStep === 2 || (o.currentStep <= 2 && !o.bomGenerated))
 
@@ -200,93 +252,144 @@ export default function BOMManagement({ currentOrder, orders, onBOMCreated, onSe
                     <p className="font-medium">Customer: {currentOrder.customerName}</p>
                     <p className="text-sm text-gray-600">Damper Type: {currentOrder.damperType}</p>
                   </div>
-                  <Badge variant={bomType === "standard" ? "default" : "secondary"}>
-                    {bomType === "standard" ? "Standard BOM" : "Custom BOM"}
+                  <Badge variant={
+                    bomType === "standard" ? "default" : 
+                    bomType === "excel" ? "secondary" : 
+                    "outline"
+                  }>
+                    {bomType === "standard" ? "Standard BOM" : 
+                     bomType === "excel" ? "Excel Imported BOM" : 
+                     "Custom BOM"}
                   </Badge>
+                  {excelImported && (
+                    <Badge variant="outline" className="text-green-600 border-green-600">
+                      <FileSpreadsheet className="h-3 w-3 mr-1" />
+                      Excel Data
+                    </Badge>
+                  )}
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* BOM Type Determination */}
+          {/* BOM Creation Methods */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Database className="h-5 w-5" />
-                BOM Type: {bomType === "standard" ? "Standard" : "Custom"}
-              </CardTitle>
+              <CardTitle>BOM Creation Method</CardTitle>
+              <CardDescription>
+                Choose how to create the Bill of Materials for this order
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {bomType === "standard" ? (
-                <div className="space-y-4">
-                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <p className="text-green-800 font-medium">Standard BOM Detected</p>
-                    <p className="text-green-600 text-sm">
-                      This damper type matches a predefined model. Retrieving standard BOM from database.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                    <p className="text-blue-800 font-medium">Custom BOM Required</p>
-                    <p className="text-blue-600 text-sm">
-                      This is a made-to-order damper. Please enter dimensions for custom BOM calculation.
-                    </p>
-                  </div>
+              <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "manual" | "excel")}>
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="manual" className="flex items-center gap-2">
+                    <Calculator className="h-4 w-4" />
+                    Manual Creation
+                  </TabsTrigger>
+                  <TabsTrigger value="excel" className="flex items-center gap-2">
+                    <FileSpreadsheet className="h-4 w-4" />
+                    Excel Integration
+                  </TabsTrigger>
+                </TabsList>
 
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="length">Length (inches)</Label>
-                      <Input
-                        id="length"
-                        type="number"
-                        value={dimensions.length}
-                        onChange={(e) => setDimensions((prev) => ({ ...prev, length: e.target.value }))}
-                        placeholder="48"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="width">Width (inches)</Label>
-                      <Input
-                        id="width"
-                        type="number"
-                        value={dimensions.width}
-                        onChange={(e) => setDimensions((prev) => ({ ...prev, width: e.target.value }))}
-                        placeholder="30"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="height">Height (inches)</Label>
-                      <Input
-                        id="height"
-                        type="number"
-                        value={dimensions.height}
-                        onChange={(e) => setDimensions((prev) => ({ ...prev, height: e.target.value }))}
-                        placeholder="12"
-                      />
-                    </div>
-                  </div>
+                <TabsContent value="manual" className="space-y-4">
+                  {/* Manual BOM Creation Content */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Database className="h-5 w-5" />
+                        BOM Type: {bomType === "standard" ? "Standard" : "Custom"}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {bomType === "standard" ? (
+                        <div className="space-y-4">
+                          <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                            <p className="text-green-800 font-medium">Standard BOM Detected</p>
+                            <p className="text-green-600 text-sm">
+                              This damper type matches a predefined model. Retrieving standard BOM from database.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                            <p className="text-blue-800 font-medium">Custom BOM Required</p>
+                            <p className="text-blue-600 text-sm">
+                              This is a made-to-order damper. Please enter dimensions for custom BOM calculation.
+                            </p>
+                          </div>
 
-                  <Button
-                    onClick={generateCustomBOM}
-                    disabled={!dimensions.length || !dimensions.width || !dimensions.height || isGenerating}
-                    className="w-full"
-                  >
-                    <Calculator className="h-4 w-4 mr-2" />
-                    {isGenerating ? "Calculating Custom BOM..." : "Generate Custom BOM"}
-                  </Button>
-                </div>
-              )}
+                          <div className="grid grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="length">Length (inches)</Label>
+                              <Input
+                                id="length"
+                                type="number"
+                                value={dimensions.length}
+                                onChange={(e) => setDimensions((prev) => ({ ...prev, length: e.target.value }))}
+                                placeholder="48"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="width">Width (inches)</Label>
+                              <Input
+                                id="width"
+                                type="number"
+                                value={dimensions.width}
+                                onChange={(e) => setDimensions((prev) => ({ ...prev, width: e.target.value }))}
+                                placeholder="30"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="height">Height (inches)</Label>
+                              <Input
+                                id="height"
+                                type="number"
+                                value={dimensions.height}
+                                onChange={(e) => setDimensions((prev) => ({ ...prev, height: e.target.value }))}
+                                placeholder="12"
+                              />
+                            </div>
+                          </div>
+
+                          <Button
+                            onClick={generateCustomBOM}
+                            disabled={!dimensions.length || !dimensions.width || !dimensions.height || isGenerating}
+                            className="w-full"
+                          >
+                            <Calculator className="h-4 w-4 mr-2" />
+                            {isGenerating ? "Calculating Custom BOM..." : "Generate Custom BOM"}
+                          </Button>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
+                <TabsContent value="excel" className="space-y-4">
+                  {/* Excel BOM Integration */}
+                  <ExcelBOMIntegration
+                    currentOrder={currentOrder}
+                    onBOMImported={handleExcelBOMImported}
+                    onBOMExported={handleExcelBOMExported}
+                    existingBOM={convertBOMForExcel(bomComponents)}
+                  />
+                </TabsContent>
+              </Tabs>
             </CardContent>
           </Card>
 
-          {/* BOM Components Table */}
+          {/* BOM Components Table - Shows for both manual and Excel methods */}
           {bomComponents.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle>Bill of Materials</CardTitle>
-                <CardDescription>Components required for Order #{currentOrder.id}</CardDescription>
+                <CardDescription>
+                  Components required for Order #{currentOrder.id}
+                  {bomType === "excel" && " (Imported from Excel)"}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -296,7 +399,9 @@ export default function BOMManagement({ currentOrder, orders, onBOMCreated, onSe
                       <TableHead>Part Number</TableHead>
                       <TableHead>Quantity</TableHead>
                       <TableHead>Material</TableHead>
-                      {bomType === "custom" && <TableHead>Size</TableHead>}
+                      {(bomType === "custom" || bomType === "excel") && <TableHead>Size</TableHead>}
+                      {bomType === "excel" && <TableHead>Unit Cost</TableHead>}
+                      {bomType === "excel" && <TableHead>Total Cost</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -306,7 +411,24 @@ export default function BOMManagement({ currentOrder, orders, onBOMCreated, onSe
                         <TableCell>{component.partNumber}</TableCell>
                         <TableCell>{component.quantity}</TableCell>
                         <TableCell>{component.material}</TableCell>
-                        {bomType === "custom" && <TableCell>{component.size || "Standard"}</TableCell>}
+                        {(bomType === "custom" || bomType === "excel") && 
+                          <TableCell>{component.size || "Standard"}</TableCell>
+                        }
+                        {bomType === "excel" && 
+                          <TableCell>
+                            {component.unitCost ? `$${component.unitCost.toFixed(2)}` : '-'}
+                          </TableCell>
+                        }
+                        {bomType === "excel" && 
+                          <TableCell>
+                            {component.totalCost ? 
+                              `$${component.totalCost.toFixed(2)}` : 
+                              component.unitCost ? 
+                                `$${(component.unitCost * component.quantity).toFixed(2)}` : 
+                                '-'
+                            }
+                          </TableCell>
+                        }
                       </TableRow>
                     ))}
                   </TableBody>
@@ -315,6 +437,13 @@ export default function BOMManagement({ currentOrder, orders, onBOMCreated, onSe
                 <div className="flex justify-between items-center mt-6 pt-4 border-t">
                   <div className="text-sm text-gray-600">
                     Total Components: {bomComponents.reduce((sum, comp) => sum + comp.quantity, 0)}
+                    {bomType === "excel" && bomComponents.some(c => c.totalCost) && (
+                      <span className="ml-4">
+                        Total Cost: ${bomComponents.reduce((sum, comp) => 
+                          sum + (comp.totalCost || (comp.unitCost || 0) * comp.quantity), 0
+                        ).toFixed(2)}
+                      </span>
+                    )}
                   </div>
                   <Button onClick={handleContinue}>Confirm BOM & Continue to UL Compliance</Button>
                 </div>

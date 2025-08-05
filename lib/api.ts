@@ -125,6 +125,26 @@ class ApiClient {
     });
   }
 
+  async createBOMBatch(orderId: string, bomItems: Omit<BOMItem, 'id' | 'order_id' | 'total_cost'>[]): Promise<BOMItem[]> {
+    return this.request<BOMItem[]>(`/orders/${orderId}/bom/batch`, {
+      method: 'POST',
+      body: JSON.stringify({ items: bomItems }),
+    });
+  }
+
+  async updateBOMBatch(orderId: string, bomItems: Omit<BOMItem, 'id' | 'order_id' | 'total_cost'>[]): Promise<BOMItem[]> {
+    return this.request<BOMItem[]>(`/orders/${orderId}/bom/batch`, {
+      method: 'PUT',
+      body: JSON.stringify({ items: bomItems }),
+    });
+  }
+
+  async deleteBOMItem(orderId: string, bomItemId: number): Promise<void> {
+    return this.request<void>(`/orders/${orderId}/bom/${bomItemId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Inventory Management
   async getInventory(): Promise<InventoryItem[]> {
     return this.request<InventoryItem[]>('/inventory');

@@ -148,6 +148,100 @@ async def create_bom_item(order_id: str, bom_item: BOMItemCreate, db: Session = 
     
     return db_bom_item
 
+@app.post("/api/orders/{order_id}/bom/batch")
+async def create_bom_batch(order_id: str, request: dict, db: Session = Depends(get_db)):
+    """Add multiple BOM items to an order (for Excel imports)"""
+    bom_items = request.get("items", [])
+    
+    if not bom_items:
+        raise HTTPException(status_code=400, detail="No BOM items provided")
+    
+    created_items = []
+    
+    for bom_data in bom_items:
+        db_bom_item = BOMItem(
+            order_id=order_id,
+            part_number=bom_data.get("part_number"),
+            description=bom_data.get("description"),
+            quantity=bom_data.get("quantity", 0),
+            unit_cost=bom_data.get("unit_cost", 0.0),
+            total_cost=bom_data.get("quantity", 0) * bom_data.get("unit_cost", 0.0),
+            supplier=bom_data.get("supplier"),
+            lead_time_days=bom_data.get("lead_time_days")
+        )
+        
+        db.add(db_bom_item)
+        created_items.append(db_bom_item)
+    
+    db.commit()
+    
+    # Refresh all items to get IDs
+    for item in created_items:
+        db.refresh(item)
+    
+    # Update order BOM status
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if order:
+        order.bom_generated = True
+        db.commit()
+    
+    return created_items
+
+@app.put("/api/orders/{order_id}/bom/batch")
+async def update_bom_batch(order_id: str, request: dict, db: Session = Depends(get_db)):
+    """Replace all BOM items for an order (for Excel updates)"""
+    bom_items = request.get("items", [])
+    
+    # Delete existing BOM items
+    db.query(BOMItem).filter(BOMItem.order_id == order_id).delete()
+    
+    created_items = []
+    
+    for bom_data in bom_items:
+        db_bom_item = BOMItem(
+            order_id=order_id,
+            part_number=bom_data.get("part_number"),
+            description=bom_data.get("description"),
+            quantity=bom_data.get("quantity", 0),
+            unit_cost=bom_data.get("unit_cost", 0.0),
+            total_cost=bom_data.get("quantity", 0) * bom_data.get("unit_cost", 0.0),
+            supplier=bom_data.get("supplier"),
+            lead_time_days=bom_data.get("lead_time_days")
+        )
+        
+        db.add(db_bom_item)
+        created_items.append(db_bom_item)
+    
+    db.commit()
+    
+    # Refresh all items to get IDs
+    for item in created_items:
+        db.refresh(item)
+    
+    # Update order BOM status
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if order:
+        order.bom_generated = True
+        db.commit()
+    
+    return created_items
+
+@app.delete("/api/orders/{order_id}/bom/{bom_item_id}")
+async def delete_bom_item(order_id: str, bom_item_id: int, db: Session = Depends(get_db)):
+    """Delete a specific BOM item"""
+    bom_item = db.query(BOMItem).filter(
+        BOMItem.id == bom_item_id,
+        BOMItem.order_id == order_id
+    ).first()
+    
+    if not bom_item:
+        raise HTTPException(status_code=404, detail="BOM item not found")
+    
+    db.delete(bom_item)
+    db.commit()
+    
+    return {"message": "BOM item deleted successfully"}
+
 # Inventory Management Endpoints
 @app.get("/api/inventory", response_model=List[InventoryItemResponse])
 async def get_inventory(db: Session = Depends(get_db)):
