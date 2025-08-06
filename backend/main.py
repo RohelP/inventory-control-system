@@ -7,7 +7,7 @@ import uvicorn
 from datetime import datetime, date
 
 from models import Order, BOMItem, InventoryItem, QualityCheck, SessionLocal, engine, Base
-from schemas import OrderCreate, OrderUpdate, OrderResponse, BOMItemCreate, InventoryItemResponse
+from schemas import OrderCreate, OrderUpdate, OrderResponse, BOMItemCreate, InventoryItemResponse, InventoryItemCreate, InventoryItemUpdate
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -249,6 +249,107 @@ async def get_inventory(db: Session = Depends(get_db)):
     items = db.query(InventoryItem).all()
     return items
 
+@app.get("/api/inventory/{part_number}", response_model=InventoryItemResponse)
+async def get_inventory_item(part_number: str, db: Session = Depends(get_db)):
+    """Get a specific inventory item by part number"""
+    item = db.query(InventoryItem).filter(InventoryItem.part_number == part_number).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    return item
+
+@app.post("/api/inventory", response_model=InventoryItemResponse)
+async def create_inventory_item(item: InventoryItemCreate, db: Session = Depends(get_db)):
+    """Create a new inventory item"""
+    # Check if part number already exists
+    existing_item = db.query(InventoryItem).filter(InventoryItem.part_number == item.part_number).first()
+    if existing_item:
+        raise HTTPException(status_code=400, detail="Part number already exists")
+    
+    db_item = InventoryItem(
+        part_number=item.part_number,
+        description=item.description,
+        category=item.category,
+        quantity_available=item.quantity_available,
+        quantity_reserved=item.quantity_reserved,
+        unit_cost=item.unit_cost,
+        reorder_level=item.reorder_level,
+        supplier=item.supplier,
+        location=item.location,
+        last_updated=datetime.now()
+    )
+    
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+
+@app.put("/api/inventory/{part_number}", response_model=InventoryItemResponse)
+async def update_inventory_item(part_number: str, item_update: InventoryItemUpdate, db: Session = Depends(get_db)):
+    """Update an existing inventory item"""
+    db_item = db.query(InventoryItem).filter(InventoryItem.part_number == part_number).first()
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    
+    # Update fields if provided
+    for field, value in item_update.dict(exclude_unset=True).items():
+        setattr(db_item, field, value)
+    
+    db_item.last_updated = datetime.now()
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+
+@app.delete("/api/inventory/{part_number}")
+async def delete_inventory_item(part_number: str, db: Session = Depends(get_db)):
+    """Delete an inventory item"""
+    db_item = db.query(InventoryItem).filter(InventoryItem.part_number == part_number).first()
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    
+    db.delete(db_item)
+    db.commit()
+    return {"message": "Inventory item deleted successfully"}
+
+@app.post("/api/inventory/batch")
+async def create_inventory_batch(request: dict, db: Session = Depends(get_db)):
+    """Add multiple inventory items (for bulk imports)"""
+    items = request.get("items", [])
+    
+    if not items:
+        raise HTTPException(status_code=400, detail="No inventory items provided")
+    
+    created_items = []
+    
+    for item_data in items:
+        # Check if part number already exists
+        existing_item = db.query(InventoryItem).filter(InventoryItem.part_number == item_data.get("part_number")).first()
+        if existing_item:
+            continue  # Skip existing items
+        
+        db_item = InventoryItem(
+            part_number=item_data.get("part_number"),
+            description=item_data.get("description"),
+            category=item_data.get("category"),
+            quantity_available=item_data.get("quantity_available", 0),
+            quantity_reserved=item_data.get("quantity_reserved", 0),
+            unit_cost=item_data.get("unit_cost"),
+            reorder_level=item_data.get("reorder_level", 10),
+            supplier=item_data.get("supplier"),
+            location=item_data.get("location"),
+            last_updated=datetime.now()
+        )
+        
+        db.add(db_item)
+        created_items.append(db_item)
+    
+    db.commit()
+    
+    # Refresh all items to get IDs
+    for item in created_items:
+        db.refresh(item)
+    
+    return created_items
+
 @app.get("/api/inventory/check/{order_id}")
 async def check_inventory_for_order(order_id: str, db: Session = Depends(get_db)):
     """Check if inventory is sufficient for an order"""
@@ -273,6 +374,98 @@ async def check_inventory_for_order(order_id: str, db: Session = Depends(get_db)
         "can_fulfill": len(insufficient_items) == 0,
         "insufficient_items": insufficient_items
     }
+
+@app.post("/api/inventory/reserve/{order_id}")
+async def reserve_inventory_for_order(order_id: str, db: Session = Depends(get_db)):
+    """Reserve inventory for an order"""
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    bom_items = db.query(BOMItem).filter(BOMItem.order_id == order_id).all()
+    
+    if not bom_items:
+        raise HTTPException(status_code=400, detail="No BOM items found for this order")
+    
+    # Check if we can reserve all items
+    insufficient_items = []
+    for bom_item in bom_items:
+        inventory_item = db.query(InventoryItem).filter(
+            InventoryItem.part_number == bom_item.part_number
+        ).first()
+        
+        if not inventory_item or inventory_item.quantity_available < bom_item.quantity:
+            insufficient_items.append({
+                "part_number": bom_item.part_number,
+                "required": bom_item.quantity,
+                "available": inventory_item.quantity_available if inventory_item else 0
+            })
+    
+    if insufficient_items:
+        raise HTTPException(status_code=400, detail="Insufficient inventory", extra={"insufficient_items": insufficient_items})
+    
+    # Reserve inventory
+    for bom_item in bom_items:
+        inventory_item = db.query(InventoryItem).filter(
+            InventoryItem.part_number == bom_item.part_number
+        ).first()
+        
+        inventory_item.quantity_available -= bom_item.quantity
+        inventory_item.quantity_reserved += bom_item.quantity
+        inventory_item.last_updated = datetime.now()
+    
+    # Update order status
+    order.inventory_reserved = True
+    order.current_step = 4  # Move to next step
+    
+    db.commit()
+    
+    return {"message": "Inventory reserved successfully", "order_id": order_id}
+
+@app.post("/api/inventory/release/{order_id}")
+async def release_inventory_for_order(order_id: str, db: Session = Depends(get_db)):
+    """Release reserved inventory for an order (e.g., if order is cancelled)"""
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    bom_items = db.query(BOMItem).filter(BOMItem.order_id == order_id).all()
+    
+    # Release inventory
+    for bom_item in bom_items:
+        inventory_item = db.query(InventoryItem).filter(
+            InventoryItem.part_number == bom_item.part_number
+        ).first()
+        
+        if inventory_item:
+            inventory_item.quantity_available += bom_item.quantity
+            inventory_item.quantity_reserved -= bom_item.quantity
+            inventory_item.last_updated = datetime.now()
+    
+    # Update order status
+    order.inventory_reserved = False
+    
+    db.commit()
+    
+    return {"message": "Inventory released successfully", "order_id": order_id}
+
+@app.get("/api/inventory/low-stock")
+async def get_low_stock_items(db: Session = Depends(get_db)):
+    """Get inventory items that are below reorder level"""
+    low_stock_items = db.query(InventoryItem).filter(
+        InventoryItem.quantity_available <= InventoryItem.reorder_level
+    ).all()
+    
+    return low_stock_items
+
+@app.get("/api/inventory/out-of-stock")
+async def get_out_of_stock_items(db: Session = Depends(get_db)):
+    """Get inventory items that are completely out of stock"""
+    out_of_stock_items = db.query(InventoryItem).filter(
+        InventoryItem.quantity_available == 0
+    ).all()
+    
+    return out_of_stock_items
 
 # Production Tracking Endpoints
 @app.put("/api/orders/{order_id}/production")

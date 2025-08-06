@@ -263,6 +263,3 @@ For additional help with Excel integration:
 - Safari
 - Edge
 
----
-
-*This Excel integration feature enhances your inventory control workflow by bridging the gap between familiar Excel-based processes and the powerful inventory management system.*

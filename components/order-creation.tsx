@@ -10,15 +10,18 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { CalendarDays, User, Phone, Mail, Package, ExternalLink } from "lucide-react"
+import { CalendarDays, User, Phone, Mail, Package, ExternalLink, Trash2 } from "lucide-react"
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog"
+import { apiClient } from "@/lib/api"
 
 interface OrderCreationProps {
   orders: any[]
   onOrderCreated: (order: any) => void
   onSelectOrder: (order: any) => void
+  onOrderDeleted?: (orderId: string) => void
 }
 
-export default function OrderCreation({ orders, onOrderCreated, onSelectOrder }: OrderCreationProps) {
+export default function OrderCreation({ orders, onOrderCreated, onSelectOrder, onOrderDeleted }: OrderCreationProps) {
   const [formData, setFormData] = useState({
     customerName: "",
     company: "",
@@ -30,6 +33,20 @@ export default function OrderCreation({ orders, onOrderCreated, onSelectOrder }:
   })
 
   const [showExternalPortal, setShowExternalPortal] = useState(false)
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null)
+
+  const handleDeleteOrder = async (orderId: string) => {
+    try {
+      setDeletingOrderId(orderId)
+      await apiClient.deleteOrder(orderId)
+      onOrderDeleted?.(orderId)
+    } catch (error) {
+      console.error("Failed to delete order:", error)
+      // You might want to show a toast notification here
+    } finally {
+      setDeletingOrderId(null)
+    }
+  }
 
   const damperTypes = [
     "Fire Damper - Standard",
@@ -160,10 +177,28 @@ export default function OrderCreation({ orders, onOrderCreated, onSelectOrder }:
                       </p>
                     )}
                   </div>
-                  <div className="text-right">
-                    <Badge variant="outline">{order.status}</Badge>
-                    <p className="text-xs text-gray-400 mt-1">Step {order.currentStep} of 7</p>
-                    <p className="text-xs text-gray-400">Created: {new Date(order.createdAt).toLocaleDateString()}</p>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <Badge variant="outline">{order.status}</Badge>
+                      <p className="text-xs text-gray-400 mt-1">Step {order.currentStep} of 7</p>
+                      <p className="text-xs text-gray-400">Created: {new Date(order.createdAt).toLocaleDateString()}</p>
+                    </div>
+                    <DeleteConfirmationDialog
+                      title={`Delete Order ${order.id}?`}
+                      description={`Are you sure you want to delete order ${order.id} for ${order.customerName}? This action cannot be undone.`}
+                      onConfirm={() => handleDeleteOrder(order.id)}
+                      isLoading={deletingOrderId === order.id}
+                      trigger={
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      }
+                    />
                   </div>
                 </div>
               ))}

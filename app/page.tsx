@@ -89,6 +89,18 @@ export default function InventoryControlSystem() {
     }
   }
 
+  // Helper function to delete order
+  const handleOrderDeleted = (orderId: string) => {
+    setOrders((prev) => prev.filter((o) => o.id !== orderId))
+    
+    // If the deleted order was the current order, clear it
+    if (currentOrder && currentOrder.id === orderId) {
+      setCurrentOrder(null)
+      setWorkflowStep(1)
+      setActiveTab("dashboard")
+    }
+  }
+
   // Load orders on component mount
   useEffect(() => {
     loadOrders()
@@ -198,6 +210,7 @@ export default function InventoryControlSystem() {
                   const stepTabs = ["", "orders", "bom", "compliance", "inventory", "purchase", "quality", "production"]
                   setActiveTab(stepTabs[order.currentStep] || "dashboard")
                 }}
+                onOrderDeleted={handleOrderDeleted}
               />
             </TabsContent>
 
@@ -229,6 +242,7 @@ export default function InventoryControlSystem() {
                   setCurrentOrder(order)
                   setWorkflowStep(order.currentStep)
                 }}
+                onOrderDeleted={handleOrderDeleted}
               />
             </TabsContent>
 

@@ -1,10 +1,13 @@
 "use client"
 
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { BarChart3, TrendingUp, AlertTriangle, CheckCircle, Clock, Package } from "lucide-react"
+import { BarChart3, TrendingUp, AlertTriangle, CheckCircle, Clock, Package, Trash2 } from "lucide-react"
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog"
+import { apiClient } from "@/lib/api"
 
 interface DashboardProps {
   currentOrder: any
@@ -12,9 +15,25 @@ interface DashboardProps {
   orders: any[]
   onNavigate: (tab: string) => void
   onSelectOrder: (order: any) => void
+  onOrderDeleted?: (orderId: string) => void
 }
 
-export default function Dashboard({ currentOrder, workflowStep, orders, onNavigate, onSelectOrder }: DashboardProps) {
+export default function Dashboard({ currentOrder, workflowStep, orders, onNavigate, onSelectOrder, onOrderDeleted }: DashboardProps) {
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null)
+
+  const handleDeleteOrder = async (orderId: string) => {
+    try {
+      setDeletingOrderId(orderId)
+      await apiClient.deleteOrder(orderId)
+      onOrderDeleted?.(orderId)
+    } catch (error) {
+      console.error("Failed to delete order:", error)
+      // You might want to show a toast notification here
+    } finally {
+      setDeletingOrderId(null)
+    }
+  }
+
   const stats = {
     totalOrders: orders.length,
     inProduction: orders.filter((o) => o.status === "In Production").length,
@@ -222,12 +241,14 @@ export default function Dashboard({ currentOrder, workflowStep, orders, onNaviga
             {orders.map((order) => (
               <div
                 key={order.id}
-                className={`flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 cursor-pointer transition-colors ${
+                className={`flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
                   currentOrder?.id === order.id ? "border-blue-500 bg-blue-50" : ""
                 }`}
-                onClick={() => onSelectOrder(order)}
               >
-                <div className="flex-1">
+                <div 
+                  className="flex-1 cursor-pointer"
+                  onClick={() => onSelectOrder(order)}
+                >
                   <div className="flex items-center gap-3">
                     <p className="font-medium">
                       {order.id} - {order.customerName}
@@ -258,9 +279,22 @@ export default function Dashboard({ currentOrder, workflowStep, orders, onNaviga
                     </div>
                   )}
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-medium">Step {order.currentStep}/7</p>
-                  <p className="text-xs text-gray-500">{new Date(order.createdAt).toLocaleDateString()}</p>
+                <div className="flex items-center gap-2">
+                  <div className="text-right">
+                    <p className="text-sm font-medium">Step {order.currentStep}/7</p>
+                    <p className="text-xs text-gray-500">{new Date(order.createdAt).toLocaleDateString()}</p>
+                  </div>
+                  <DeleteConfirmationDialog
+                    title={`Delete Order ${order.id}?`}
+                    description={`Are you sure you want to delete order ${order.id} for ${order.customerName}? This action cannot be undone and will also delete all associated BOM items and inventory reservations.`}
+                    onConfirm={() => handleDeleteOrder(order.id)}
+                    isLoading={deletingOrderId === order.id}
+                    trigger={
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    }
+                  />
                 </div>
               </div>
             ))}

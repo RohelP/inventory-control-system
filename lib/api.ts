@@ -58,6 +58,29 @@ export interface InventoryItem {
   last_updated: string;
 }
 
+export interface InventoryItemCreate {
+  part_number: string;
+  description: string;
+  category?: string;
+  quantity_available: number;
+  quantity_reserved: number;
+  unit_cost?: number;
+  reorder_level: number;
+  supplier?: string;
+  location?: string;
+}
+
+export interface InventoryItemUpdate {
+  description?: string;
+  category?: string;
+  quantity_available?: number;
+  quantity_reserved?: number;
+  unit_cost?: number;
+  reorder_level?: number;
+  supplier?: string;
+  location?: string;
+}
+
 class ApiClient {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
@@ -148,6 +171,57 @@ class ApiClient {
   // Inventory Management
   async getInventory(): Promise<InventoryItem[]> {
     return this.request<InventoryItem[]>('/inventory');
+  }
+
+  async getInventoryItem(partNumber: string): Promise<InventoryItem> {
+    return this.request<InventoryItem>(`/inventory/${partNumber}`);
+  }
+
+  async createInventoryItem(item: InventoryItemCreate): Promise<InventoryItem> {
+    return this.request<InventoryItem>('/inventory', {
+      method: 'POST',
+      body: JSON.stringify(item),
+    });
+  }
+
+  async updateInventoryItem(partNumber: string, updates: InventoryItemUpdate): Promise<InventoryItem> {
+    return this.request<InventoryItem>(`/inventory/${partNumber}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteInventoryItem(partNumber: string): Promise<void> {
+    return this.request<void>(`/inventory/${partNumber}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async createInventoryBatch(items: InventoryItemCreate[]): Promise<InventoryItem[]> {
+    return this.request<InventoryItem[]>('/inventory/batch', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
+  }
+
+  async reserveInventoryForOrder(orderId: string): Promise<{ message: string; order_id: string }> {
+    return this.request(`/inventory/reserve/${orderId}`, {
+      method: 'POST',
+    });
+  }
+
+  async releaseInventoryForOrder(orderId: string): Promise<{ message: string; order_id: string }> {
+    return this.request(`/inventory/release/${orderId}`, {
+      method: 'POST',
+    });
+  }
+
+  async getLowStockItems(): Promise<InventoryItem[]> {
+    return this.request<InventoryItem[]>('/inventory/low-stock');
+  }
+
+  async getOutOfStockItems(): Promise<InventoryItem[]> {
+    return this.request<InventoryItem[]>('/inventory/out-of-stock');
   }
 
   async checkInventoryForOrder(orderId: string): Promise<{
