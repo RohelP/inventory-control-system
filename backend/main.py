@@ -6,8 +6,37 @@ from typing import List, Optional
 import uvicorn
 from datetime import datetime, date
 
-from models import Order, BOMItem, InventoryItem, QualityCheck, SessionLocal, engine, Base
-from schemas import OrderCreate, OrderUpdate, OrderResponse, BOMItemCreate, InventoryItemResponse, InventoryItemCreate, InventoryItemUpdate
+from models import (
+    Order,
+    BOMItem,
+    InventoryItem,
+    QualityCheck,
+    SessionLocal,
+    engine,
+    Base,
+    ItemPlanningParams,
+    InventoryReceipt,
+    InventoryAllocation,
+    ItemABC,
+)
+from schemas import (
+    OrderCreate,
+    OrderUpdate,
+    OrderResponse,
+    BOMItemCreate,
+    InventoryItemResponse,
+    InventoryItemCreate,
+    InventoryItemUpdate,
+    ItemPlanningParamsCreate,
+    ItemPlanningParamsUpdate,
+    ItemPlanningParamsResponse,
+    InventoryReceiptCreate,
+    InventoryReceiptResponse,
+    InventoryAllocationResponse,
+    ItemABCCreate,
+    ItemABCUpdate,
+    ItemABCResponse,
+)
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -281,6 +310,34 @@ async def create_inventory_item(item: InventoryItemCreate, db: Session = Depends
     db.add(db_item)
     db.commit()
     db.refresh(db_item)
+
+    # Initialize planning params row if absent
+    existing_params = db.query(ItemPlanningParams).filter(ItemPlanningParams.part_number == item.part_number).first()
+    if not existing_params:
+        params = ItemPlanningParams(
+            part_number=item.part_number,
+            demand_rate_per_day=0.0,
+            lead_time_days=0,
+            safety_stock=0,
+            consumption_policy="FIFO",
+            computed_reorder_level=item.reorder_level,
+            updated_at=datetime.now(),
+        )
+        db.add(params)
+        db.commit()
+
+    # Seed an opening balance receipt if quantity_available > 0
+    if item.quantity_available and item.quantity_available > 0:
+        opening_receipt = InventoryReceipt(
+            part_number=item.part_number,
+            quantity_received=item.quantity_available,
+            quantity_remaining=item.quantity_available,
+            unit_cost=item.unit_cost or 0.0,
+            received_at=datetime.now(),
+        )
+        db.add(opening_receipt)
+        db.commit()
+
     return db_item
 
 @app.put("/api/inventory/{part_number}", response_model=InventoryItemResponse)
@@ -344,11 +401,84 @@ async def create_inventory_batch(request: dict, db: Session = Depends(get_db)):
     
     db.commit()
     
-    # Refresh all items to get IDs
+    # Refresh all items to get IDs and seed planning/receipts
     for item in created_items:
         db.refresh(item)
-    
+        # Initialize planning params if absent
+        existing_params = db.query(ItemPlanningParams).filter(ItemPlanningParams.part_number == item.part_number).first()
+        if not existing_params:
+            params = ItemPlanningParams(
+                part_number=item.part_number,
+                demand_rate_per_day=0.0,
+                lead_time_days=0,
+                safety_stock=0,
+                consumption_policy="FIFO",
+                computed_reorder_level=item.reorder_level or 10,
+                updated_at=datetime.now(),
+            )
+            db.add(params)
+            db.commit()
+        # Seed opening balance receipt if quantity > 0
+        if item.quantity_available and item.quantity_available > 0:
+            opening_receipt = InventoryReceipt(
+                part_number=item.part_number,
+                quantity_received=item.quantity_available,
+                quantity_remaining=item.quantity_available,
+                unit_cost=item.unit_cost or 0.0,
+                received_at=datetime.now(),
+            )
+            db.add(opening_receipt)
+            db.commit()
+
     return created_items
+
+
+# Helper: allocate from receipts according to policy
+def _allocate_from_receipts(db: Session, order_id: str, part_number: str, quantity_required: int) -> list[InventoryAllocation]:
+    params = db.query(ItemPlanningParams).filter(ItemPlanningParams.part_number == part_number).first()
+    policy = (params.consumption_policy if params and params.consumption_policy in ("FIFO", "LIFO") else "FIFO")
+    order_by_clause = InventoryReceipt.received_at.asc() if policy == "FIFO" else InventoryReceipt.received_at.desc()
+
+    available_receipts = (
+        db.query(InventoryReceipt)
+        .filter(
+            InventoryReceipt.part_number == part_number,
+            InventoryReceipt.quantity_remaining > 0,
+        )
+        .order_by(order_by_clause)
+        .all()
+    )
+
+    remaining_to_allocate = quantity_required
+    created_allocations: list[InventoryAllocation] = []
+    for receipt in available_receipts:
+        if remaining_to_allocate <= 0:
+            break
+        take_qty = min(receipt.quantity_remaining, remaining_to_allocate)
+        if take_qty <= 0:
+            continue
+        receipt.quantity_remaining -= take_qty
+        allocation = InventoryAllocation(
+            order_id=order_id,
+            part_number=part_number,
+            receipt_id=receipt.id,
+            quantity_allocated=take_qty,
+            allocated_at=datetime.now(),
+        )
+        db.add(allocation)
+        created_allocations.append(allocation)
+        remaining_to_allocate -= take_qty
+
+    if remaining_to_allocate > 0:
+        # Not enough lots to support allocation; revert and raise
+        for allocation in created_allocations:
+            receipt = db.query(InventoryReceipt).filter(InventoryReceipt.id == allocation.receipt_id).first()
+            if receipt:
+                receipt.quantity_remaining += allocation.quantity_allocated
+            db.delete(allocation)
+        raise HTTPException(status_code=400, detail=f"Insufficient lot-level inventory for {part_number}")
+
+    return created_allocations
 
 @app.get("/api/inventory/check/{order_id}")
 async def check_inventory_for_order(order_id: str, db: Session = Depends(get_db)):
@@ -404,12 +534,22 @@ async def reserve_inventory_for_order(order_id: str, db: Session = Depends(get_d
     if insufficient_items:
         raise HTTPException(status_code=400, detail="Insufficient inventory", extra={"insufficient_items": insufficient_items})
     
-    # Reserve inventory
+    # Reserve inventory with FIFO/LIFO allocations
     for bom_item in bom_items:
-        inventory_item = db.query(InventoryItem).filter(
-            InventoryItem.part_number == bom_item.part_number
-        ).first()
-        
+        inventory_item = db.query(InventoryItem).filter(InventoryItem.part_number == bom_item.part_number).first()
+        # Seed an opening receipt if this legacy item has on-hand qty but no receipts
+        has_receipts = db.query(InventoryReceipt).filter(InventoryReceipt.part_number == bom_item.part_number).first()
+        if not has_receipts and (inventory_item.quantity_available or 0) > 0:
+            opening_receipt = InventoryReceipt(
+                part_number=bom_item.part_number,
+                quantity_received=inventory_item.quantity_available,
+                quantity_remaining=inventory_item.quantity_available,
+                unit_cost=inventory_item.unit_cost or 0.0,
+                received_at=datetime.now(),
+            )
+            db.add(opening_receipt)
+            db.commit()
+        _allocate_from_receipts(db, order_id, bom_item.part_number, bom_item.quantity)
         inventory_item.quantity_available -= bom_item.quantity
         inventory_item.quantity_reserved += bom_item.quantity
         inventory_item.last_updated = datetime.now()
@@ -431,16 +571,18 @@ async def release_inventory_for_order(order_id: str, db: Session = Depends(get_d
     
     bom_items = db.query(BOMItem).filter(BOMItem.order_id == order_id).all()
     
-    # Release inventory
-    for bom_item in bom_items:
-        inventory_item = db.query(InventoryItem).filter(
-            InventoryItem.part_number == bom_item.part_number
-        ).first()
-        
+    # Release inventory using recorded allocations
+    allocations = db.query(InventoryAllocation).filter(InventoryAllocation.order_id == order_id).all()
+    for allocation in allocations:
+        receipt = db.query(InventoryReceipt).filter(InventoryReceipt.id == allocation.receipt_id).first()
+        if receipt:
+            receipt.quantity_remaining += allocation.quantity_allocated
+        inventory_item = db.query(InventoryItem).filter(InventoryItem.part_number == allocation.part_number).first()
         if inventory_item:
-            inventory_item.quantity_available += bom_item.quantity
-            inventory_item.quantity_reserved -= bom_item.quantity
+            inventory_item.quantity_available += allocation.quantity_allocated
+            inventory_item.quantity_reserved -= allocation.quantity_allocated
             inventory_item.last_updated = datetime.now()
+        db.delete(allocation)
     
     # Update order status
     order.inventory_reserved = False
@@ -448,6 +590,183 @@ async def release_inventory_for_order(order_id: str, db: Session = Depends(get_d
     db.commit()
     
     return {"message": "Inventory released successfully", "order_id": order_id}
+
+
+# Receiving inventory lots
+@app.post("/api/inventory/receipts", response_model=InventoryReceiptResponse)
+async def create_inventory_receipt(receipt: InventoryReceiptCreate, db: Session = Depends(get_db)):
+    item = db.query(InventoryItem).filter(InventoryItem.part_number == receipt.part_number).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+
+    db_receipt = InventoryReceipt(
+        part_number=receipt.part_number,
+        quantity_received=receipt.quantity_received,
+        quantity_remaining=receipt.quantity_received,
+        unit_cost=receipt.unit_cost,
+        received_at=receipt.received_at or datetime.now(),
+        expiration_date=receipt.expiration_date,
+    )
+    db.add(db_receipt)
+
+    # Update on-hand
+    item.quantity_available += receipt.quantity_received
+    if receipt.unit_cost is not None:
+        item.unit_cost = receipt.unit_cost
+    item.last_updated = datetime.now()
+
+    db.commit()
+    db.refresh(db_receipt)
+    return db_receipt
+
+
+@app.get("/api/inventory/receipts/{part_number}", response_model=List[InventoryReceiptResponse])
+async def list_inventory_receipts(part_number: str, db: Session = Depends(get_db)):
+    receipts = (
+        db.query(InventoryReceipt)
+        .filter(InventoryReceipt.part_number == part_number)
+        .order_by(InventoryReceipt.received_at.desc())
+        .all()
+    )
+    return receipts
+
+
+# Planning parameters and reorder computation
+def _compute_reorder_level(demand_rate_per_day: float, lead_time_days: int, safety_stock: int) -> int:
+    if demand_rate_per_day < 0:
+        demand_rate_per_day = 0
+    if lead_time_days < 0:
+        lead_time_days = 0
+    if safety_stock < 0:
+        safety_stock = 0
+    reorder_point = int(round(demand_rate_per_day * lead_time_days + safety_stock))
+    return max(reorder_point, 0)
+
+
+@app.post("/api/inventory/{part_number}/planning", response_model=ItemPlanningParamsResponse)
+async def upsert_planning_params(part_number: str, params: ItemPlanningParamsCreate, db: Session = Depends(get_db)):
+    item = db.query(InventoryItem).filter(InventoryItem.part_number == part_number).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+
+    existing = db.query(ItemPlanningParams).filter(ItemPlanningParams.part_number == part_number).first()
+    computed = _compute_reorder_level(params.demand_rate_per_day, params.lead_time_days, params.safety_stock)
+    if existing:
+        existing.demand_rate_per_day = params.demand_rate_per_day
+        existing.lead_time_days = params.lead_time_days
+        existing.safety_stock = params.safety_stock
+        existing.consumption_policy = params.consumption_policy
+        existing.computed_reorder_level = computed
+        existing.updated_at = datetime.now()
+        planning = existing
+    else:
+        planning = ItemPlanningParams(
+            part_number=part_number,
+            demand_rate_per_day=params.demand_rate_per_day,
+            lead_time_days=params.lead_time_days,
+            safety_stock=params.safety_stock,
+            consumption_policy=params.consumption_policy,
+            computed_reorder_level=computed,
+            updated_at=datetime.now(),
+        )
+        db.add(planning)
+
+    # Sync item.reorder_level with computed value
+    item.reorder_level = computed
+    item.last_updated = datetime.now()
+    db.commit()
+    db.refresh(planning)
+    return planning
+
+
+@app.patch("/api/inventory/{part_number}/planning", response_model=ItemPlanningParamsResponse)
+async def update_planning_params(part_number: str, updates: ItemPlanningParamsUpdate, db: Session = Depends(get_db)):
+    planning = db.query(ItemPlanningParams).filter(ItemPlanningParams.part_number == part_number).first()
+    if not planning:
+        raise HTTPException(status_code=404, detail="Planning params not found for item")
+
+    for field, value in updates.dict(exclude_unset=True).items():
+        setattr(planning, field, value)
+
+    computed = _compute_reorder_level(planning.demand_rate_per_day, planning.lead_time_days, planning.safety_stock)
+    planning.computed_reorder_level = computed
+    planning.updated_at = datetime.now()
+
+    # Sync item.reorder_level
+    item = db.query(InventoryItem).filter(InventoryItem.part_number == part_number).first()
+    if item:
+        item.reorder_level = computed
+        item.last_updated = datetime.now()
+
+    db.commit()
+    db.refresh(planning)
+    return planning
+
+
+# ABC analysis endpoints
+@app.post("/api/inventory/abc/{part_number}", response_model=ItemABCResponse)
+async def upsert_item_abc(part_number: str, payload: ItemABCCreate, db: Session = Depends(get_db)):
+    item = db.query(InventoryItem).filter(InventoryItem.part_number == part_number).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+
+    acv = float(payload.annual_demand) * float(item.unit_cost or 0.0)
+    existing = db.query(ItemABC).filter(ItemABC.part_number == part_number).first()
+    if existing:
+        existing.annual_demand = payload.annual_demand
+        existing.annual_consumption_value = acv
+        existing.computed_at = datetime.now()
+        result = existing
+    else:
+        result = ItemABC(
+            part_number=part_number,
+            annual_demand=payload.annual_demand,
+            annual_consumption_value=acv,
+            abc_class=None,
+            computed_at=datetime.now(),
+        )
+        db.add(result)
+    db.commit()
+    db.refresh(result)
+    return result
+
+
+@app.post("/api/inventory/abc/recompute")
+async def recompute_abc_classes(db: Session = Depends(get_db)):
+    items = db.query(ItemABC).all()
+    if not items:
+        return {"updated": 0}
+
+    # Refresh ACV from current unit_cost
+    part_to_cost = {}
+    for i in items:
+        inv = db.query(InventoryItem).filter(InventoryItem.part_number == i.part_number).first()
+        part_to_cost[i.part_number] = (inv.unit_cost if inv and inv.unit_cost is not None else 0.0)
+    for i in items:
+        unit_cost = float(part_to_cost.get(i.part_number) or 0.0)
+        i.annual_consumption_value = float(i.annual_demand or 0) * unit_cost
+
+    # Rank by ACV desc and assign A/B/C with 80/15/5 cumulative rule
+    items_sorted = sorted(items, key=lambda x: x.annual_consumption_value, reverse=True)
+    total_acv = sum(i.annual_consumption_value for i in items_sorted) or 1.0
+    cumulative = 0.0
+    for i in items_sorted:
+        share = (i.annual_consumption_value / total_acv)
+        cumulative += share
+        if cumulative <= 0.80:
+            i.abc_class = "A"
+        elif cumulative <= 0.95:
+            i.abc_class = "B"
+        else:
+            i.abc_class = "C"
+
+    db.commit()
+    return {"updated": len(items_sorted)}
+
+
+@app.get("/api/inventory/abc", response_model=List[ItemABCResponse])
+async def list_item_abc(db: Session = Depends(get_db)):
+    return db.query(ItemABC).all()
 
 @app.get("/api/inventory/low-stock")
 async def get_low_stock_items(db: Session = Depends(get_db)):

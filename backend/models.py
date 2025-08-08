@@ -107,3 +107,53 @@ class PurchaseOrderItem(Base):
     quantity = Column(Integer, nullable=False)
     unit_cost = Column(Float, nullable=False)
     total_cost = Column(Float, nullable=False)
+
+# Inventory planning parameters per item (kept separate to avoid schema migration of inventory_items)
+class ItemPlanningParams(Base):
+    __tablename__ = "item_planning_params"
+
+    id = Column(Integer, primary_key=True, index=True)
+    part_number = Column(String, unique=True, nullable=False, index=True)
+    demand_rate_per_day = Column(Float, default=0.0)
+    lead_time_days = Column(Integer, default=0)
+    safety_stock = Column(Integer, default=0)
+    consumption_policy = Column(String, default="FIFO")  # FIFO or LIFO
+    computed_reorder_level = Column(Integer, default=10)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ABC classification per item
+class ItemABC(Base):
+    __tablename__ = "item_abc"
+
+    id = Column(Integer, primary_key=True, index=True)
+    part_number = Column(String, unique=True, nullable=False, index=True)
+    annual_demand = Column(Integer, default=0)
+    annual_consumption_value = Column(Float, default=0.0)
+    abc_class = Column(String)  # 'A', 'B', or 'C'
+    computed_at = Column(DateTime, default=datetime.utcnow)
+
+
+# Inventory lot receipts to support FIFO/LIFO
+class InventoryReceipt(Base):
+    __tablename__ = "inventory_receipts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    part_number = Column(String, nullable=False, index=True)
+    quantity_received = Column(Integer, nullable=False)
+    quantity_remaining = Column(Integer, nullable=False)
+    unit_cost = Column(Float, nullable=False)
+    received_at = Column(DateTime, default=datetime.utcnow)
+    expiration_date = Column(DateTime, nullable=True)
+
+
+# Allocations against receipts (so we can release later)
+class InventoryAllocation(Base):
+    __tablename__ = "inventory_allocations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(String, ForeignKey("orders.id"), nullable=False, index=True)
+    part_number = Column(String, nullable=False, index=True)
+    receipt_id = Column(Integer, ForeignKey("inventory_receipts.id"), nullable=False)
+    quantity_allocated = Column(Integer, nullable=False)
+    allocated_at = Column(DateTime, default=datetime.utcnow)

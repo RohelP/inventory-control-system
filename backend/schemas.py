@@ -146,3 +146,86 @@ class DashboardStats(BaseModel):
     pending_ul: int
     needs_purchase: int
     quality_control: int
+
+
+# Planning parameters and FIFO/LIFO policy
+class ItemPlanningParamsBase(BaseModel):
+    part_number: str
+    demand_rate_per_day: float = 0.0
+    lead_time_days: int = 0
+    safety_stock: int = 0
+    consumption_policy: str = "FIFO"  # FIFO or LIFO
+
+class ItemPlanningParamsCreate(ItemPlanningParamsBase):
+    pass
+
+class ItemPlanningParamsUpdate(BaseModel):
+    demand_rate_per_day: Optional[float] = None
+    lead_time_days: Optional[int] = None
+    safety_stock: Optional[int] = None
+    consumption_policy: Optional[str] = None
+
+class ItemPlanningParamsResponse(ItemPlanningParamsBase):
+    id: int
+    computed_reorder_level: int
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Inventory lot receipts
+class InventoryReceiptCreate(BaseModel):
+    part_number: str
+    quantity_received: int
+    unit_cost: float
+    received_at: Optional[datetime] = None
+    expiration_date: Optional[datetime] = None
+
+class InventoryReceiptResponse(BaseModel):
+    id: int
+    part_number: str
+    quantity_received: int
+    quantity_remaining: int
+    unit_cost: float
+    received_at: datetime
+    expiration_date: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# Inventory allocation response
+class InventoryAllocationResponse(BaseModel):
+    id: int
+    order_id: str
+    part_number: str
+    receipt_id: int
+    quantity_allocated: int
+    allocated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ABC analysis schemas
+class ItemABCBase(BaseModel):
+    part_number: str
+    annual_demand: int = 0
+
+class ItemABCCreate(ItemABCBase):
+    pass
+
+class ItemABCUpdate(BaseModel):
+    annual_demand: Optional[int] = None
+
+class ItemABCResponse(BaseModel):
+    id: int
+    part_number: str
+    annual_demand: int
+    annual_consumption_value: float
+    abc_class: Optional[str] = None
+    computed_at: datetime
+
+    class Config:
+        from_attributes = True

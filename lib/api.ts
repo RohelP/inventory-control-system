@@ -81,6 +81,67 @@ export interface InventoryItemUpdate {
   location?: string;
 }
 
+// Planning params and FIFO/LIFO policy
+export interface ItemPlanningParams {
+  id: number;
+  part_number: string;
+  demand_rate_per_day: number;
+  lead_time_days: number;
+  safety_stock: number;
+  consumption_policy: 'FIFO' | 'LIFO';
+  computed_reorder_level: number;
+  updated_at: string;
+}
+
+export interface ItemPlanningParamsCreate {
+  part_number: string;
+  demand_rate_per_day: number;
+  lead_time_days: number;
+  safety_stock: number;
+  consumption_policy: 'FIFO' | 'LIFO';
+}
+
+export interface ItemPlanningParamsUpdate {
+  demand_rate_per_day?: number;
+  lead_time_days?: number;
+  safety_stock?: number;
+  consumption_policy?: 'FIFO' | 'LIFO';
+}
+
+// Inventory receipts (lot tracking)
+export interface InventoryReceiptCreate {
+  part_number: string;
+  quantity_received: number;
+  unit_cost: number;
+  received_at?: string;
+  expiration_date?: string | null;
+}
+
+export interface InventoryReceipt {
+  id: number;
+  part_number: string;
+  quantity_received: number;
+  quantity_remaining: number;
+  unit_cost: number;
+  received_at: string;
+  expiration_date?: string | null;
+}
+
+// ABC analysis
+export interface ItemABC {
+  id: number;
+  part_number: string;
+  annual_demand: number;
+  annual_consumption_value: number;
+  abc_class?: 'A' | 'B' | 'C' | null;
+  computed_at: string;
+}
+
+export interface ItemABCCreate {
+  part_number: string;
+  annual_demand: number;
+}
+
 class ApiClient {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
@@ -243,6 +304,51 @@ class ApiClient {
       method: 'PUT',
       body: JSON.stringify({ progress }),
     });
+  }
+
+  // Inventory Receipts (lot tracking)
+  async createInventoryReceipt(payload: InventoryReceiptCreate): Promise<InventoryReceipt> {
+    return this.request<InventoryReceipt>('/inventory/receipts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listInventoryReceipts(partNumber: string): Promise<InventoryReceipt[]> {
+    return this.request<InventoryReceipt[]>(`/inventory/receipts/${partNumber}`);
+  }
+
+  // Planning parameters and reorder computation
+  async upsertPlanningParams(partNumber: string, params: ItemPlanningParamsCreate): Promise<ItemPlanningParams> {
+    return this.request<ItemPlanningParams>(`/inventory/${partNumber}/planning`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async updatePlanningParams(partNumber: string, updates: ItemPlanningParamsUpdate): Promise<ItemPlanningParams> {
+    return this.request<ItemPlanningParams>(`/inventory/${partNumber}/planning`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  // ABC analysis
+  async upsertItemABC(partNumber: string, annualDemand: number): Promise<ItemABC> {
+    return this.request<ItemABC>(`/inventory/abc/${partNumber}`, {
+      method: 'POST',
+      body: JSON.stringify({ part_number: partNumber, annual_demand: annualDemand }),
+    });
+  }
+
+  async recomputeABC(): Promise<{ updated: number }> {
+    return this.request<{ updated: number }>(`/inventory/abc/recompute`, {
+      method: 'POST',
+    });
+  }
+
+  async listItemABC(): Promise<ItemABC[]> {
+    return this.request<ItemABC[]>(`/inventory/abc`);
   }
 
   // Health Check
